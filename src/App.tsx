@@ -14,11 +14,19 @@ import {
   markAllNotificationsRead,
 } from './services/ideaService';
 import { getOverdueReminders } from './services/monevService';
-import { STORAGE_KEYS, readStorage, writeStorage } from './services/storageService';
+import {
+  STORAGE_KEYS,
+  hydrateFromServer,
+  normalizeJoinCode,
+  onExternalSync,
+  readStorage,
+  writeStorage,
+} from './services/storageService';
 import {
   getMemberRole,
   getWorkspaceById,
   getWorkspaces,
+  joinWorkspaceByCodeAsync,
 } from './services/workspaceService';
 import { AppNotification, Idea, User, Workspace } from './types/ideacard';
 import { LandingPage } from './components/auth/LandingPage';
@@ -53,6 +61,7 @@ export default function App() {
   const [selectedIdeaId, setSelectedIdeaId] = useState<string | null>(null);
   const [writeModalOpen, setWriteModalOpen] = useState(false);
   const [ideaToConvert, setIdeaToConvert] = useState<Idea | null>(null);
+  const [pendingJoinCode, setPendingJoinCode] = useState<string>('');
   const [refreshTick, setRefreshTick] = useState(0);
 
   // Sync Tailwind dark class on <html>
@@ -66,9 +75,17 @@ export default function App() {
     writeStorage(STORAGE_KEYS.THEME_MODE, darkMode);
   }, [darkMode]);
 
-  // Seed data & restore session on mount
+  // Hydrate server state, seed data, parse ?ruang= link, & restore session on mount
   useEffect(() => {
     async function init() {
+      const params = new URLSearchParams(window.location.search);
+      const rawParam = params.get('ruang') || params.get('gabung') || '';
+      const inviteCode = rawParam ? normalizeJoinCode(rawParam) : '';
+      if (inviteCode && window.history?.replaceState) {
+        window.history.replaceState({}, '', window.location.pathname);
+      }
+
+      await hydrateFromServer();
       await ensureSeedData();
       const session = getSession();
       if (session.isGuest) {
@@ -86,6 +103,26 @@ export default function App() {
         const user = getUserById(session.userId);
         if (user) {
           setCurrentUser(user);
+          if (inviteCode) {
+            const joinRes = await joinWorkspaceByCodeAsync({ code: inviteCode, user });
+            if (!('error' in joinRes)) {
+              const role = getMemberRole(joinRes.workspace, user.id);
+              setActiveWorkspace(joinRes.workspace);
+              setSession({
+                userId: user.id,
+                isGuest: false,
+                activeWorkspaceId: joinRes.workspace.id,
+              });
+              setActiveTab(role === 'pengamat' ? 'publik' : 'personal');
+              setScreen('app');
+              setReady(true);
+              return;
+            }
+            setPendingJoinCode(inviteCode);
+            setScreen('workspace_select');
+            setReady(true);
+            return;
+          }
           if (session.activeWorkspaceId) {
             const ws = getWorkspaceById(session.activeWorkspaceId);
             if (ws) {
@@ -97,12 +134,29 @@ export default function App() {
           } else {
             setScreen('workspace_select');
           }
+        } else if (inviteCode) {
+          setPendingJoinCode(inviteCode);
+          setScreen('auth');
         }
+      } else if (inviteCode) {
+        setPendingJoinCode(inviteCode);
+        setScreen('auth');
       }
       setReady(true);
     }
     init();
   }, []);
+
+  // Sinkronisasi otomatis antar tab saat ada perubahan penyimpanan bersama
+  useEffect(() => {
+    return onExternalSync(() => {
+      if (activeWorkspace?.id) {
+        const latestWs = getWorkspaceById(activeWorkspace.id);
+        if (latestWs) setActiveWorkspace(latestWs);
+      }
+      setRefreshTick((t) => t + 1);
+    });
+  }, [activeWorkspace?.id]);
 
   function triggerRefresh() {
     if (activeWorkspace) {
@@ -124,13 +178,31 @@ export default function App() {
     setScreen('app');
   }
 
-  function handleAuthenticated(user: User) {
+  async function handleAuthenticated(user: User) {
     setCurrentUser(user);
     setIsGuest(false);
+    if (pendingJoinCode) {
+      const joinRes = await joinWorkspaceByCodeAsync({ code: pendingJoinCode, user });
+      if (!('error' in joinRes)) {
+        setPendingJoinCode('');
+        setActiveWorkspace(joinRes.workspace);
+        setSession({
+          userId: user.id,
+          isGuest: false,
+          activeWorkspaceId: joinRes.workspace.id,
+        });
+        const role = getMemberRole(joinRes.workspace, user.id);
+        setActiveTab(role === 'pengamat' ? 'publik' : 'personal');
+        setSelectedIdeaId(null);
+        setScreen('app');
+        return;
+      }
+    }
     setScreen('workspace_select');
   }
 
   function handleSelectWorkspace(ws: Workspace) {
+    setPendingJoinCode('');
     setActiveWorkspace(ws);
     setSession({
       userId: currentUser?.id || null,
@@ -145,6 +217,7 @@ export default function App() {
 
   function handleLogout() {
     clearSession();
+    setPendingJoinCode('');
     setCurrentUser(null);
     setIsGuest(false);
     setActiveWorkspace(null);
@@ -199,6 +272,7 @@ export default function App() {
       <WorkspaceSelector
         user={currentUser}
         darkMode={darkMode}
+        initialJoinCode={pendingJoinCode}
         onToggleDarkMode={() => setDarkMode(!darkMode)}
         onSelectWorkspace={handleSelectWorkspace}
         onLogout={handleLogout}

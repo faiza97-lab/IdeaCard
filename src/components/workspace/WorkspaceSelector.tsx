@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   AlertCircle,
   ArrowRight,
@@ -12,12 +12,13 @@ import {
   Trash2,
   Users,
 } from 'lucide-react';
+import { hydrateFromServer, onExternalSync } from '../../services/storageService';
 import {
   WORKSPACE_TEMPLATES,
   createWorkspace,
   getMemberRole,
   getUserWorkspaces,
-  joinWorkspaceByCode,
+  joinWorkspaceByCodeAsync,
 } from '../../services/workspaceService';
 import { Bidang, BidangColor, User, Workspace, WorkspaceTemplateId } from '../../types/ideacard';
 import { BIDANG_COLOR_MAP, getRoleLabel } from '../../utils/themeUtils';
@@ -25,6 +26,7 @@ import { BIDANG_COLOR_MAP, getRoleLabel } from '../../utils/themeUtils';
 interface WorkspaceSelectorProps {
   user: User;
   darkMode: boolean;
+  initialJoinCode?: string;
   onToggleDarkMode: () => void;
   onSelectWorkspace: (workspace: Workspace) => void;
   onLogout: () => void;
@@ -35,14 +37,36 @@ const DEFAULT_COLORS: BidangColor[] = ['mint', 'sky', 'purple', 'orange', 'coral
 export function WorkspaceSelector({
   user,
   darkMode,
+  initialJoinCode = '',
   onToggleDarkMode,
   onSelectWorkspace,
   onLogout,
 }: WorkspaceSelectorProps) {
   const [workspaces, setWorkspaces] = useState<Workspace[]>(() => getUserWorkspaces(user.id));
-  const [joinCode, setJoinCode] = useState('');
+  const [joinCode, setJoinCode] = useState(initialJoinCode);
   const [joinError, setJoinError] = useState('');
+  const [joining, setJoining] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    hydrateFromServer().then(() => {
+      if (active) setWorkspaces(getUserWorkspaces(user.id));
+    });
+    const unsubscribe = onExternalSync(() => {
+      setWorkspaces(getUserWorkspaces(user.id));
+    });
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, [user.id]);
+
+  useEffect(() => {
+    if (initialJoinCode) {
+      setJoinCode(initialJoinCode);
+    }
+  }, [initialJoinCode]);
 
   // Create form state
   const [templateId, setTemplateId] = useState<WorkspaceTemplateId>('kelas');
@@ -85,11 +109,16 @@ export function WorkspaceSelector({
     setDraftBidangList(next);
   }
 
-  function handleJoinSubmit(e: React.FormEvent) {
+  async function handleJoinSubmit(e: React.FormEvent) {
     e.preventDefault();
     setJoinError('');
-    if (!joinCode.trim()) return;
-    const res = joinWorkspaceByCode({ code: joinCode, user });
+    if (!joinCode.trim()) {
+      setJoinError('Masukkan kode ruang terlebih dahulu.');
+      return;
+    }
+    setJoining(true);
+    const res = await joinWorkspaceByCodeAsync({ code: joinCode, user });
+    setJoining(false);
     if ('error' in res) {
       setJoinError(res.error);
       return;
@@ -458,9 +487,12 @@ export function WorkspaceSelector({
                 <input
                   type="text"
                   value={joinCode}
-                  onChange={(e) => setJoinCode(e.target.value)}
-                  placeholder="Contoh: OSIS-SMA1"
-                  className="w-full rounded-xl border border-slate-300 bg-white px-4 py-2.5 font-mono text-sm uppercase text-slate-900 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-white"
+                  onChange={(e) => {
+                    setJoinCode(e.target.value);
+                    if (joinError) setJoinError('');
+                  }}
+                  placeholder="Contoh: OSIS-SMA1 atau tempel tautan ruang"
+                  className="w-full rounded-xl border border-slate-300 bg-white px-4 py-2.5 font-mono text-sm text-slate-900 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-white"
                 />
                 {joinError && (
                   <div className="flex items-start gap-2 rounded-xl bg-rose-50 p-3 text-xs text-rose-700 dark:bg-rose-950/40 dark:text-rose-200">
@@ -470,9 +502,10 @@ export function WorkspaceSelector({
                 )}
                 <button
                   type="submit"
-                  className="w-full min-h-[44px] rounded-2xl bg-slate-900 px-4 py-2.5 text-sm font-bold text-white hover:bg-slate-800 dark:bg-indigo-600 dark:hover:bg-indigo-700 transition-colors cursor-pointer"
+                  disabled={joining}
+                  className="w-full min-h-[44px] rounded-2xl bg-slate-900 px-4 py-2.5 text-sm font-bold text-white hover:bg-slate-800 disabled:opacity-60 dark:bg-indigo-600 dark:hover:bg-indigo-700 transition-colors cursor-pointer"
                 >
-                  Gabung Ruang
+                  {joining ? 'Memeriksa kode...' : 'Gabung Ruang'}
                 </button>
               </form>
 

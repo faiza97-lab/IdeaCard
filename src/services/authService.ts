@@ -4,6 +4,7 @@ import {
   generateId,
   generateSalt,
   hashSecret,
+  hydrateFromServer,
   mapUsernameToInternalEmail,
   readStorage,
   removeStorage,
@@ -93,6 +94,8 @@ export async function registerUser(params: {
     return { error: 'Password minimal 8 karakter.' };
   }
 
+  await hydrateFromServer();
+
   const users = getUsers();
   if (users.some((u) => u.username.toLowerCase() === cleanUsername)) {
     return { error: 'Username sudah digunakan. Silakan pilih username lain.' };
@@ -124,6 +127,8 @@ export async function loginUser(params: {
   username: string;
   password: string;
 }): Promise<{ user: User } | { error: string }> {
+  await hydrateFromServer();
+
   const cleanUsername = params.username.trim().toLowerCase();
   const users = getUsers();
   const user = users.find((u) => u.username.toLowerCase() === cleanUsername);
@@ -155,6 +160,8 @@ export async function resetPasswordWithRecoveryCode(params: {
   if (params.newPassword.length < 8) {
     return { error: 'Password baru minimal 8 karakter.' };
   }
+
+  await hydrateFromServer();
 
   const users = getUsers();
   const idx = users.findIndex((u) => u.username.toLowerCase() === cleanUsername);
@@ -190,6 +197,7 @@ export async function resetPasswordWithRecoveryCode(params: {
 export async function adminResetMemberPassword(
   targetUserId: string
 ): Promise<{ tempPassword: string } | { error: string }> {
+  await hydrateFromServer();
   const users = getUsers();
   const idx = users.findIndex((u) => u.id === targetUserId);
   if (idx === -1) {

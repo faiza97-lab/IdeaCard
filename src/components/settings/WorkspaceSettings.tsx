@@ -7,6 +7,7 @@ import {
   Copy,
   Edit3,
   KeyRound,
+  Link2,
   Plus,
   Save,
   Trash2,
@@ -21,6 +22,7 @@ import {
   switchActivePeriod,
   updateMemberRole,
   updateWorkspace,
+  updateWorkspaceJoinCode,
 } from '../../services/workspaceService';
 import {
   AccentTheme,
@@ -85,6 +87,10 @@ export function WorkspaceSettings({
     tempPassword: string;
   } | null>(null);
   const [copiedJoinCode, setCopiedJoinCode] = useState(false);
+  const [copiedJoinLink, setCopiedJoinLink] = useState(false);
+  const [editingJoinCode, setEditingJoinCode] = useState(false);
+  const [joinCodeDraft, setJoinCodeDraft] = useState(workspace.joinCode);
+  const [joinCodeError, setJoinCodeError] = useState('');
 
   function saveGeneralSettings(e: React.FormEvent) {
     e.preventDefault();
@@ -260,22 +266,109 @@ export function WorkspaceSettings({
           </p>
         </div>
 
-        <div className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-2.5 dark:border-slate-800 dark:bg-slate-900">
-          <span className="text-xs text-slate-500">Kode Gabung:</span>
-          <code className="font-mono text-sm font-bold text-indigo-600 dark:text-indigo-400">
-            {workspace.joinCode}
-          </code>
-          <button
-            type="button"
-            onClick={() => {
-              navigator.clipboard?.writeText(workspace.joinCode);
-              setCopiedJoinCode(true);
-              setTimeout(() => setCopiedJoinCode(false), 1800);
-            }}
-            className="p-1 text-slate-400 hover:text-indigo-600 cursor-pointer"
-          >
-            {copiedJoinCode ? <Check className="h-4 w-4 text-emerald-600" /> : <Copy className="h-4 w-4" />}
-          </button>
+        <div className="flex flex-col items-end gap-1.5">
+          {editingJoinCode && isAdmin ? (
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                setJoinCodeError('');
+                const res = updateWorkspaceJoinCode(workspace.id, joinCodeDraft);
+                if ('error' in res) {
+                  setJoinCodeError(res.error);
+                  return;
+                }
+                onWorkspaceUpdated(res.workspace);
+                setJoinCodeDraft(res.workspace.joinCode);
+                setEditingJoinCode(false);
+              }}
+              className="flex flex-wrap items-center gap-2 rounded-2xl border border-indigo-300 bg-white px-3 py-2 dark:border-indigo-700 dark:bg-slate-900"
+            >
+              <span className="text-xs font-semibold text-slate-500">Kode:</span>
+              <input
+                type="text"
+                value={joinCodeDraft}
+                onChange={(e) => {
+                  setJoinCodeDraft(e.target.value);
+                  setJoinCodeError('');
+                }}
+                placeholder="MISAL: OSIS-SMA2"
+                className="w-36 rounded-lg border border-slate-300 bg-slate-50 px-2.5 py-1 font-mono text-xs font-bold uppercase text-slate-900 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-white"
+              />
+              <button
+                type="submit"
+                className="inline-flex items-center gap-1 rounded-lg bg-indigo-600 px-2.5 py-1 text-xs font-bold text-white hover:bg-indigo-700 cursor-pointer whitespace-nowrap shrink-0"
+              >
+                <Check className="h-3.5 w-3.5" />
+                Simpan
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setEditingJoinCode(false);
+                  setJoinCodeDraft(workspace.joinCode);
+                  setJoinCodeError('');
+                }}
+                className="p-1 text-slate-400 hover:text-slate-600 cursor-pointer"
+                aria-label="Batal ubah kode ruang"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </form>
+          ) : (
+            <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-2.5 dark:border-slate-800 dark:bg-slate-900">
+              <span className="text-xs text-slate-500">Kode Gabung:</span>
+              <code className="font-mono text-sm font-bold text-indigo-600 dark:text-indigo-400">
+                {workspace.joinCode}
+              </code>
+              <button
+                type="button"
+                title="Salin kode ruang"
+                onClick={() => {
+                  navigator.clipboard?.writeText(workspace.joinCode);
+                  setCopiedJoinCode(true);
+                  setTimeout(() => setCopiedJoinCode(false), 1800);
+                }}
+                className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-100 hover:text-indigo-600 dark:text-slate-300 dark:hover:bg-slate-800 cursor-pointer whitespace-nowrap shrink-0"
+              >
+                {copiedJoinCode ? <Check className="h-3.5 w-3.5 text-emerald-600" /> : <Copy className="h-3.5 w-3.5" />}
+                {copiedJoinCode ? 'Tersalin' : 'Salin'}
+              </button>
+              <button
+                type="button"
+                title="Salin tautan gabung ruang"
+                onClick={() => {
+                  const link = `${window.location.origin}/?ruang=${encodeURIComponent(workspace.joinCode)}`;
+                  navigator.clipboard?.writeText(link);
+                  setCopiedJoinLink(true);
+                  setTimeout(() => setCopiedJoinLink(false), 1800);
+                }}
+                className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-100 hover:text-indigo-600 dark:text-slate-300 dark:hover:bg-slate-800 cursor-pointer whitespace-nowrap shrink-0"
+              >
+                {copiedJoinLink ? <Check className="h-3.5 w-3.5 text-emerald-600" /> : <Link2 className="h-3.5 w-3.5" />}
+                {copiedJoinLink ? 'Tautan Tersalin' : 'Tautan'}
+              </button>
+              {isAdmin && (
+                <button
+                  type="button"
+                  title="Ubah kode gabung"
+                  onClick={() => {
+                    setJoinCodeDraft(workspace.joinCode);
+                    setJoinCodeError('');
+                    setEditingJoinCode(true);
+                  }}
+                  className="p-1 text-slate-400 hover:text-indigo-600 cursor-pointer"
+                  aria-label="Ubah kode ruang"
+                >
+                  <Edit3 className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
+          )}
+          {joinCodeError && (
+            <p className="text-xs font-semibold text-rose-600 dark:text-rose-400">
+              {joinCodeError}
+            </p>
+          )}
         </div>
       </div>
 

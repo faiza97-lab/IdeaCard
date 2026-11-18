@@ -12,7 +12,15 @@ import {
   WorkspaceTemplateId,
   WorkspaceTerms,
 } from '../types/ideacard';
-import { STORAGE_KEYS, generateId, readStorage, writeStorage } from './storageService';
+import {
+  STORAGE_KEYS,
+  generateId,
+  hydrateFromServer,
+  normalizeJoinCode,
+  readStorage,
+  stripHyphens,
+  writeStorage,
+} from './storageService';
 
 export interface WorkspaceTemplate {
   id: WorkspaceTemplateId;
@@ -234,13 +242,22 @@ export function createWorkspace(params: {
     id: generateId('bdg'),
   }));
 
-  const joinCode =
-    params.name
-      .replace(/[^A-Za-z0-9]/g, '')
-      .toUpperCase()
-      .slice(0, 4) +
-    '-' +
-    Math.random().toString(36).substring(2, 6).toUpperCase();
+  const existingCodes = new Set(getWorkspaces().map((w) => stripHyphens(w.joinCode.toUpperCase())));
+  const rawPrefix = params.name.replace(/[^A-Za-z0-9]/g, '').toUpperCase().slice(0, 4);
+  const prefix = rawPrefix.length >= 2 ? rawPrefix : 'RUANG';
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let joinCode = '';
+  for (let attempt = 0; attempt < 10; attempt++) {
+    const suffix = Array.from({ length: 4 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+    const candidate = `${prefix}-${suffix}`;
+    if (!existingCodes.has(stripHyphens(candidate))) {
+      joinCode = candidate;
+      break;
+    }
+  }
+  if (!joinCode) {
+    joinCode = `${prefix}-${Date.now().toString(36).slice(-4).toUpperCase()}`;
+  }
 
   const workspace: Workspace = {
     id: generateId('ws'),
@@ -281,9 +298,18 @@ export function joinWorkspaceByCode(params: {
   code: string;
   user: User;
 }): { workspace: Workspace } | { error: string } {
-  const cleanCode = params.code.trim().toUpperCase();
+  const cleanCode = normalizeJoinCode(params.code);
+  const cleanNoHyphen = stripHyphens(cleanCode);
+  if (!cleanNoHyphen) {
+    return { error: 'Masukkan kode ruang terlebih dahulu.' };
+  }
+
   const workspaces = getWorkspaces();
-  const idx = workspaces.findIndex((w) => w.joinCode.toUpperCase() === cleanCode);
+  const idx = workspaces.findIndex((w) => {
+    const wsCode = normalizeJoinCode(w.joinCode);
+    return wsCode === cleanCode || stripHyphens(wsCode) === cleanNoHyphen;
+  });
+
   if (idx === -1) {
     return { error: 'Kode ruang tidak ditemukan. Periksa kembali kode dari admin ruangmu.' };
   }
@@ -304,6 +330,83 @@ export function joinWorkspaceByCode(params: {
     };
     writeStorage(STORAGE_KEYS.WORKSPACES, workspaces);
   }
+  return { workspace: workspaces[idx] };
+}
+
+export async function joinWorkspaceByCodeAsync(params: {
+  code: string;
+  user: User;
+}): Promise<{ workspace: Workspace } | { error: string }> {
+  const cleanCode = normalizeJoinCode(params.code);
+  if (!stripHyphens(cleanCode)) {
+    return { error: 'Masukkan kode ruang terlebih dahulu.' };
+  }
+
+  // Sinkronkan terlebih dahulu agar ruang yang baru dibuat di browser/perangkat lain langsung terbaca
+  await hydrateFromServer();
+
+  // Coba gabung atomik melalui server agar keanggotaan tersimpan sebelum lanjut
+  try {
+    const res = await fetch('/api/workspaces/join', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        code: cleanCode,
+        user: {
+          id: params.user.id,
+          username: params.user.username,
+          displayName: params.user.displayName,
+        },
+      }),
+    });
+    if (res.ok) {
+      const data = (await res.json()) as { workspace: Workspace; workspaces?: Workspace[] };
+      if (Array.isArray(data.workspaces)) {
+        writeStorage(STORAGE_KEYS.WORKSPACES, data.workspaces, true);
+      }
+      return { workspace: data.workspace };
+    }
+
+    // Jika server belum memiliki ruang yang hanya ada di lokal tab ini, cek lokal lalu sinkronkan
+    const localResult = joinWorkspaceByCode({ code: cleanCode, user: params.user });
+    if (!('error' in localResult)) {
+      return localResult;
+    }
+
+    const errBody = (await res.json().catch(() => null)) as { error?: string } | null;
+    return {
+      error:
+        errBody?.error ||
+        'Kode ruang tidak ditemukan. Periksa kembali kode dari admin ruangmu.',
+    };
+  } catch {
+    return joinWorkspaceByCode({ code: cleanCode, user: params.user });
+  }
+}
+
+export function updateWorkspaceJoinCode(
+  workspaceId: string,
+  rawNewCode: string
+): { workspace: Workspace } | { error: string } {
+  const formatted = normalizeJoinCode(rawNewCode).replace(/[^A-Z0-9-]/g, '');
+  const stripped = stripHyphens(formatted);
+  if (stripped.length < 4 || stripped.length > 16) {
+    return { error: 'Kode ruang harus terdiri dari 4–16 huruf atau angka.' };
+  }
+
+  const workspaces = getWorkspaces();
+  const duplicate = workspaces.some(
+    (w) => w.id !== workspaceId && stripHyphens(normalizeJoinCode(w.joinCode)) === stripped
+  );
+  if (duplicate) {
+    return { error: 'Kode ruang ini sudah dipakai ruang lain. Pilih kombinasi lain.' };
+  }
+
+  const idx = workspaces.findIndex((w) => w.id === workspaceId);
+  if (idx === -1) return { error: 'Ruang tidak ditemukan.' };
+
+  workspaces[idx] = { ...workspaces[idx], joinCode: formatted };
+  writeStorage(STORAGE_KEYS.WORKSPACES, workspaces);
   return { workspace: workspaces[idx] };
 }
 
